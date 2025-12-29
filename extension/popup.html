@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --mullet-orange: #EA9842;
+      --mullet-orange-dark: #d4872f;
+      --mullet-red: #ef591b;
+      --mullet-red-dark: #d94a10;
+      --mullet-bg: #1a1a1a;
+      --mullet-bg-light: #2a2a2a;
+      --mullet-text: #f5f5f5;
+      --mullet-text-muted: #999;
+      --mullet-border: #3a3a3a;
+    }
+    body {
+      width: 280px;
+      padding: 16px;
+      font-family: 'Work Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
+      background: var(--mullet-bg);
+      color: var(--mullet-text);
+      margin: 0;
+    }
+    h3 {
+      margin: 0 0 12px 0;
+      font-family: 'VT323', monospace;
+      font-size: 24px;
+      color: var(--mullet-orange);
+      letter-spacing: 1px;
+    }
+    .status {
+      padding: 8px 12px;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-family: 'VT323', monospace;
+      font-size: 16px;
+    }
+    .status.connected {
+      background: rgba(234, 152, 66, 0.15);
+      color: var(--mullet-orange);
+      border: 1px solid var(--mullet-orange);
+    }
+    .status.disconnected {
+      background: rgba(239, 89, 27, 0.15);
+      color: var(--mullet-red);
+      border: 1px solid var(--mullet-red);
+    }
+    .session-control {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: var(--mullet-bg-light);
+      border-radius: 8px;
+      border: 1px solid var(--mullet-border);
+    }
+    .session-label {
+      font-size: 13px;
+      color: var(--mullet-text);
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 48px;
+      height: 26px;
+      flex-shrink: 0;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #444;
+      transition: 0.3s;
+      border-radius: 26px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.3s;
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: var(--mullet-orange);
+    }
+    input:checked + .slider:before {
+      transform: translateX(22px);
+    }
+    input:disabled + .slider {
+      background-color: #333;
+      cursor: not-allowed;
+    }
+    .info {
+      font-size: 11px;
+      color: var(--mullet-text-muted);
+      border-top: 1px solid var(--mullet-border);
+      padding-top: 12px;
+      margin-top: 4px;
+    }
+    .divider {
+      border-top: 1px solid var(--mullet-border);
+      margin: 12px 0;
+    }
+    .record-section {
+      margin-bottom: 12px;
+    }
+    .record-section h4 {
+      margin: 0 0 8px 0;
+      font-size: 18px;
+      font-family: 'VT323', monospace;
+      color: var(--mullet-text);
+    }
+    .record-btn {
+      width: 100%;
+      padding: 10px 16px;
+      font-size: 16px;
+      font-family: 'VT323', monospace;
+      font-weight: 500;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .record-btn.start {
+      background: var(--mullet-red);
+      color: white;
+    }
+    .record-btn.start:hover {
+      background: var(--mullet-red-dark);
+    }
+    .record-btn.stop {
+      background: #555;
+      color: white;
+    }
+    .record-btn.stop:hover {
+      background: #666;
+    }
+    .record-btn:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+    }
+    .recording-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(239, 89, 27, 0.15);
+      border: 1px solid var(--mullet-red);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-family: 'VT323', monospace;
+      color: var(--mullet-red);
+    }
+    .recording-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--mullet-red);
+      border-radius: 50%;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .action-count {
+      margin-left: auto;
+      font-weight: 500;
+    }
+    .save-section {
+      margin-top: 8px;
+    }
+    .name-input {
+      width: 100%;
+      padding: 8px 12px;
+      font-size: 14px;
+      font-family: 'Work Sans', sans-serif;
+      border: 1px solid var(--mullet-border);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      box-sizing: border-box;
+      background: var(--mullet-bg-light);
+      color: var(--mullet-text);
+    }
+    .name-input:focus {
+      outline: none;
+      border-color: var(--mullet-orange);
+    }
+    .name-input::placeholder {
+      color: var(--mullet-text-muted);
+    }
+    .save-btn {
+      width: 100%;
+      padding: 10px 16px;
+      font-size: 16px;
+      font-family: 'VT323', monospace;
+      font-weight: 500;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      background: var(--mullet-orange);
+      color: white;
+    }
+    .save-btn:hover {
+      background: var(--mullet-orange-dark);
+    }
+    .save-btn:disabled {
+      background: #333;
+      color: #666;
+      cursor: not-allowed;
+    }
+    .hidden {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+  <h3>Bronco Browser</h3>
+
+  <div id="server-status" class="status disconnected">
+    Checking connection...
+  </div>
+
+  <div class="session-control">
+    <label class="switch">
+      <input type="checkbox" id="session-toggle">
+      <span class="slider"></span>
+    </label>
+    <span id="session-label" class="session-label">Claude can control browser</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="record-section">
+    <h4>Record Actions</h4>
+
+    <div id="recording-indicator" class="recording-indicator hidden">
+      <span class="recording-dot"></span>
+      <span>Recording...</span>
+      <span id="action-count" class="action-count">0 actions</span>
+    </div>
+
+    <button id="record-btn" class="record-btn start">
+      ⏺ Start Recording
+    </button>
+
+    <div id="save-section" class="save-section hidden">
+      <input type="text" id="recording-name" class="name-input" placeholder="Name this recording...">
+      <button id="save-btn" class="save-btn">Save Recording</button>
+    </div>
+  </div>
+
+  <div class="info">
+    Wrangle your browser. Record actions, then let Claude ride.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

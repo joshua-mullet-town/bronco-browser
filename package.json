@@ -1,0 +1,40 @@
+{
+  "name": "bronco-browser",
+  "version": "1.0.0",
+  "description": "Wrangle your browser. MCP server for browser automation using your real browser.",
+  "keywords": [
+    "mcp",
+    "browser",
+    "automation",
+    "claude",
+    "chrome",
+    "extension"
+  ],
+  "author": "Mullet Town",
+  "license": "MIT",
+  "homepage": "https://github.com/joshua-mullet-town/bronco-browser#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joshua-mullet-town/bronco-browser.git"
+  },
+  "bugs": {
+    "url": "https://github.com/joshua-mullet-town/bronco-browser/issues"
+  },
+  "type": "module",
+  "main": "server/index.js",
+  "bin": {
+    "bronco-browser": "server/index.js"
+  },
+  "files": [
+    "server/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

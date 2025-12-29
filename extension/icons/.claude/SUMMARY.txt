@@ -1,0 +1,2 @@
+USER asked to implement and test core browser automation tools for MCP Bridge extension.
+AGENT implemented all Phase 0 and Phase 1 tools, requesting a reload of the extension in Chrome and restart of Claude Code; then tested navigation, click, type actions with confirmation from user that only enabled tabs are accessible to them.

@@ -1,0 +1,15 @@
+{
+  "name": "bronco-browser",
+  "version": "1.0.0",
+  "description": "Wrangle your browser. MCP server for automation using your real browser.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}

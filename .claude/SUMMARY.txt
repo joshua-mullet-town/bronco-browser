@@ -1,0 +1,1 @@
+USER asked to see a summary of actions taken for rebranding and hosting. AGENT provided details on changes made to popup UI, extension manifest, MCP server configuration including package name change and recording directory setup, as well as the updated README content with feature comparison table information included in it.
