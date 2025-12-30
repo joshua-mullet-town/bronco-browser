@@ -19,10 +19,10 @@
 
 ### 1. Install the Chrome Extension
 
-1. Open Chrome and go to `chrome://extensions`
-2. Enable "Developer mode" (top right)
-3. Click "Load unpacked"
-4. Select the `extension/` folder
+1. Clone this repo (or download the `extension/` folder)
+2. Open Chrome → `chrome://extensions`
+3. Enable "Developer mode" (top right)
+4. Click "Load unpacked" → select the `extension/` folder
 
 ### 2. Add MCP Server to Claude Code
 
@@ -32,9 +32,8 @@ Add to your `~/.claude.json`:
 {
   "mcpServers": {
     "bronco-browser": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/path/to/bronco-browser/server/index.js"]
+      "command": "npx",
+      "args": ["bronco-browser"]
     }
   }
 }
@@ -42,7 +41,7 @@ Add to your `~/.claude.json`:
 
 ### 3. Restart Claude Code
 
-The tools will be available. Click the extension icon to enable browser automation for the current tab.
+The tools will be available. Click the extension icon to enable a tab for automation.
 
 ## Available Tools
 

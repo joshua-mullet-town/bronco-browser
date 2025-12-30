@@ -85,7 +85,15 @@ wss.on('connection', (socket) => {
 function sendToExtension(method, params = {}) {
   return new Promise((resolve, reject) => {
     if (!extensionSocket) {
-      reject(new Error('Browser extension not connected. Please ensure the extension is installed and the browser is open.'));
+      reject(new Error(`Browser extension not connected.
+
+To use Bronco Browser:
+1. Install the Chrome extension from: https://github.com/mullet-town/bronco-browser
+   (Clone the repo, go to chrome://extensions, enable Developer mode, Load unpacked → select extension folder)
+2. Open Chrome
+3. Click the Bronco Browser extension icon to enable the current tab
+
+The extension must be running and connected for browser automation to work.`));
       return;
     }
 
