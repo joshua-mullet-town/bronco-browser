@@ -1,6 +1,6 @@
 {
   "name": "bronco-browser",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Wrangle your browser. MCP server for browser automation using your real browser.",
   "keywords": [
     "mcp",
@@ -26,7 +26,8 @@
     "bronco-browser": "server/index.js"
   },
   "files": [
-    "server/",
+    "server/index.js",
+    "server/package.json",
     "README.md",
     "LICENSE"
   ],
