@@ -1,14 +1,16 @@
 {
   "name": "bronco-browser",
-  "version": "1.0.1",
-  "description": "Wrangle your browser. MCP server for browser automation using your real browser.",
+  "version": "1.2.0",
+  "description": "Wrangle your browser. MCP server for browser automation using your real browser with parallel test support.",
   "keywords": [
     "mcp",
     "browser",
     "automation",
     "claude",
     "chrome",
-    "extension"
+    "extension",
+    "testing",
+    "parallel"
   ],
   "author": "Mullet Town",
   "license": "MIT",
@@ -23,11 +25,13 @@
   "type": "module",
   "main": "server/index.js",
   "bin": {
-    "bronco-browser": "server/index.js"
+    "bronco-browser": "./cli.js"
   },
   "files": [
+    "cli.js",
     "server/index.js",
     "server/package.json",
+    ".claude/commands/bronco-run-tests.md",
     "README.md",
     "LICENSE"
   ],

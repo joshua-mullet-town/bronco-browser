@@ -7,6 +7,8 @@ const WS_URL = 'ws://localhost:9876';
 let ws = null;
 let connectedTabId = null;
 let keepAliveInterval = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY = 30000; // Max 30 seconds between attempts
 
 // Session-based control: ON = all tabs accessible, OFF = nothing
 let sessionEnabled = false;
@@ -85,6 +87,7 @@ function connect() {
 
   ws.onopen = () => {
     console.log('[Background] WebSocket connected');
+    reconnectAttempts = 0; // Reset on successful connection
     startKeepAlive();
     // Notify server we're ready
     send({ type: 'extension_ready' });
@@ -93,9 +96,16 @@ function connect() {
   };
 
   ws.onmessage = async (event) => {
-    console.log('[Background] Received:', event.data);
     try {
       const message = JSON.parse(event.data);
+
+      // Handle ping from server (keepalive)
+      if (message.type === 'ping') {
+        send({ type: 'pong' });
+        return;
+      }
+
+      console.log('[Background] Received:', event.data);
       await handleMessage(message);
     } catch (err) {
       console.error('[Background] Error handling message:', err);
@@ -103,12 +113,16 @@ function connect() {
   };
 
   ws.onclose = () => {
-    console.log('[Background] WebSocket closed, reconnecting in 3s...');
     stopKeepAlive();
     ws = null;
     // Update icon to reflect disconnected state
     updateIcon();
-    setTimeout(connect, 3000);
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+    reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), MAX_RECONNECT_DELAY);
+    console.log(`[Background] WebSocket closed, reconnecting in ${delay/1000}s... (attempt ${reconnectAttempts})`);
+    setTimeout(connect, delay);
   };
 
   ws.onerror = (err) => {
@@ -159,68 +173,76 @@ async function handleMessage(message) {
         break;
 
       case 'upload_file':
-        result = await uploadFile(params);
+        result = await uploadFile(params, params.tabId);
         break;
 
       case 'get_page_info':
-        result = await getPageInfo();
+        result = await getPageInfo(params.tabId);
         break;
 
       case 'navigate':
-        result = await navigate(params.url);
+        result = await navigate(params.url, params.tabId);
         break;
 
       case 'click':
-        result = await click(params.selector);
+        result = await click(params.selector, params.tabId);
         break;
 
       case 'type':
-        result = await type(params.selector, params.text);
+        result = await type(params.selector, params.text, params.tabId);
         break;
 
       case 'select_option':
-        result = await selectOption(params.selector, params.value);
+        result = await selectOption(params.selector, params.value, params.tabId);
         break;
 
       case 'press_key':
-        result = await pressKey(params.key, params.selector);
+        result = await pressKey(params.key, params.selector, params.tabId);
         break;
 
       case 'screenshot':
-        result = await screenshot();
+        result = await screenshot(params.tabId);
         break;
 
       case 'go_back':
-        result = await goBack();
+        result = await goBack(params.tabId);
         break;
 
       case 'go_forward':
-        result = await goForward();
+        result = await goForward(params.tabId);
         break;
 
       case 'console_messages':
-        result = await getConsoleMessages();
+        result = await getConsoleMessages(params.tabId);
         break;
 
       case 'snapshot':
-        result = await getSnapshot();
+        result = await getSnapshot(params.tabId);
         break;
 
       case 'tab_new':
-        result = await createTab(params.url);
+        result = await createTab(params.url, params.windowId);
+        break;
+
+      case 'window_new':
+        result = await createWindow(params.url);
+        break;
+
+      case 'window_close':
+        result = await closeWindow(params.windowId);
         break;
 
       // Phase 2 methods
       case 'hover':
-        result = await hover(params.selector);
+        result = await hover(params.selector, params.tabId);
         break;
 
       case 'drag':
-        result = await drag(params.sourceSelector, params.targetSelector);
+        result = await drag(params.sourceSelector, params.targetSelector, params.tabId);
         break;
 
       case 'handle_dialog':
-        result = await handleDialog(params.action, params.promptText);
+        result = await handleDialog(params.action, params.promptText, params.tabId);
         break;
 
       case 'tab_close':
@@ -229,27 +251,27 @@ async function handleMessage(message) {
 
       // Phase 3 methods
       case 'scroll':
-        result = await scroll(params.direction, params.amount, params.selector);
+        result = await scroll(params.direction, params.amount, params.selector, params.tabId);
         break;
 
       case 'wait_for_selector':
-        result = await waitForSelector(params.selector, params.timeout);
+        result = await waitForSelector(params.selector, params.timeout, params.tabId);
         break;
 
       case 'evaluate':
-        result = await evaluate(params.code);
+        result = await evaluate(params.code, params.tabId);
         break;
 
       case 'get_cookies':
-        result = await getCookies();
+        result = await getCookies(params.tabId);
         break;
 
       case 'set_cookie':
-        result = await setCookie(params);
+        result = await setCookie(params, params.tabId);
         break;
 
       case 'network_requests':
-        result = await getNetworkRequests(params.filter);
+        result = await getNetworkRequests(params.filter, params.tabId);
         break;
 
       // Recording methods
@@ -321,30 +343,24 @@ function disconnectTab() {
 }
 
 // Get info about connected page
-async function getPageInfo() {
-  if (!connectedTabId) {
-    throw new Error('No tab connected');
-  }
-
-  const tab = await chrome.tabs.get(connectedTabId);
+async function getPageInfo(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
+  const tab = await chrome.tabs.get(tabId);
   return {
-    tabId: connectedTabId,
+    tabId,
     title: tab.title,
     url: tab.url
   };
 }
 
 // Upload file to an input element
-async function uploadFile(params) {
+async function uploadFile(params, explicitTabId) {
   const { selector, fileName, fileContent, mimeType } = params;
-
-  if (!connectedTabId) {
-    throw new Error('No tab connected. Use connect_tab first.');
-  }
+  const tabId = resolveTabId(explicitTabId);
 
   // Execute in the content script context
   const results = await chrome.scripting.executeScript({
-    target: { tabId: connectedTabId },
+    target: { tabId },
     func: injectFile,
     args: [selector, fileName, fileContent, mimeType]
   });
@@ -355,24 +371,30 @@ async function uploadFile(params) {
   throw new Error('Script execution failed');
 }
 
-// Helper to check connected tab
-function requireConnectedTab() {
-  if (!connectedTabId) {
-    throw new Error('No tab connected. Use connect_tab first.');
+// Helper to resolve tab ID - uses explicit tabId if provided, otherwise falls back to connectedTabId
+function resolveTabId(explicitTabId) {
+  const tabId = explicitTabId || connectedTabId;
+  if (!tabId) {
+    throw new Error('No tab specified and no tab connected. Use connect_tab first or pass tabId.');
   }
-  return connectedTabId;
+  return tabId;
+}
+
+// Legacy helper for backward compatibility
+function requireConnectedTab() {
+  return resolveTabId(null);
 }
 
 // Navigate to URL
-async function navigate(url) {
-  const tabId = requireConnectedTab();
+async function navigate(url, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   await chrome.tabs.update(tabId, { url });
-  return { success: true, url };
+  return { success: true, url, tabId };
 }
 
 // Click an element
-async function click(selector) {
-  const tabId = requireConnectedTab();
+async function click(selector, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (sel) => {
@@ -387,8 +409,8 @@ async function click(selector) {
 }
 
 // Type text into an element
-async function type(selector, text) {
-  const tabId = requireConnectedTab();
+async function type(selector, text, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (sel, txt) => {
@@ -406,8 +428,8 @@ async function type(selector, text) {
 }
 
 // Select an option from a dropdown
-async function selectOption(selector, value) {
-  const tabId = requireConnectedTab();
+async function selectOption(selector, value, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (sel, val) => {
@@ -424,8 +446,8 @@ async function selectOption(selector, value) {
 }
 
 // Press a keyboard key
-async function pressKey(key, selector) {
-  const tabId = requireConnectedTab();
+async function pressKey(key, selector, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (k, sel) => {
@@ -443,15 +465,17 @@ async function pressKey(key, selector) {
 }
 
 // Take a screenshot
-async function screenshot() {
-  const tabId = requireConnectedTab();
+async function screenshot(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
+  // Need to focus the tab first for captureVisibleTab to work
+  await chrome.tabs.update(tabId, { active: true });
   const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
-  return { success: true, dataUrl };
+  return { success: true, dataUrl, tabId };
 }
 
 // Go back in history
-async function goBack() {
-  const tabId = requireConnectedTab();
+async function goBack(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
@@ -463,8 +487,8 @@ async function goBack() {
 }
 
 // Go forward in history
-async function goForward() {
-  const tabId = requireConnectedTab();
+async function goForward(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
@@ -476,8 +500,8 @@ async function goForward() {
 }
 
 // Get console messages (injects interceptor and returns captured messages)
-async function getConsoleMessages() {
-  const tabId = requireConnectedTab();
+async function getConsoleMessages(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
@@ -515,8 +539,8 @@ async function getConsoleMessages() {
 }
 
 // Get page snapshot (accessibility tree-like structure)
-async function getSnapshot() {
-  const tabId = requireConnectedTab();
+async function getSnapshot(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
@@ -576,20 +600,48 @@ async function getSnapshot() {
 }
 
 // Create a new tab
-async function createTab(url) {
-  const tab = await chrome.tabs.create({ url: url || 'about:blank' });
+async function createTab(url, windowId) {
+  const options = { url: url || 'about:blank' };
+  if (windowId) {
+    options.windowId = windowId;
+  }
+  const tab = await chrome.tabs.create(options);
   return {
     success: true,
     tabId: tab.id,
+    windowId: tab.windowId,
     url: tab.url
+  };
+}
+
+// Create a new browser window
+async function createWindow(url) {
+  const window = await chrome.windows.create({
+    url: url || 'about:blank',
+    focused: true
+  });
+  return {
+    success: true,
+    windowId: window.id,
+    tabId: window.tabs?.[0]?.id,
+    url: url || 'about:blank'
+  };
+}
+
+// Close a browser window
+async function closeWindow(windowId) {
+  await chrome.windows.remove(windowId);
+  return {
+    success: true,
+    closedWindowId: windowId
   };
 }
 
 // ========== Phase 2 Functions ==========
 
 // Hover over an element
-async function hover(selector) {
-  const tabId = requireConnectedTab();
+async function hover(selector, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (sel) => {
@@ -613,8 +665,8 @@ async function hover(selector) {
 }
 
 // Drag an element to another element
-async function drag(sourceSelector, targetSelector) {
-  const tabId = requireConnectedTab();
+async function drag(sourceSelector, targetSelector, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (srcSel, tgtSel) => {
@@ -663,8 +715,8 @@ async function drag(sourceSelector, targetSelector) {
 }
 
 // Handle browser dialogs (alert, confirm, prompt)
-async function handleDialog(action, promptText) {
-  const tabId = requireConnectedTab();
+async function handleDialog(action, promptText, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (act, txt) => {
@@ -707,8 +759,8 @@ async function closeTab(tabId) {
 // ========== Phase 3 Functions ==========
 
 // Scroll the page or element
-async function scroll(direction, amount, selector) {
-  const tabId = requireConnectedTab();
+async function scroll(direction, amount, selector, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const scrollAmount = amount || 500;
 
   const results = await chrome.scripting.executeScript({
@@ -741,8 +793,8 @@ async function scroll(direction, amount, selector) {
 }
 
 // Wait for a selector to appear
-async function waitForSelector(selector, timeout) {
-  const tabId = requireConnectedTab();
+async function waitForSelector(selector, timeout, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const maxTime = timeout || 10000;
 
   const results = await chrome.scripting.executeScript({
@@ -766,8 +818,8 @@ async function waitForSelector(selector, timeout) {
 }
 
 // Execute arbitrary JavaScript
-async function evaluate(code) {
-  const tabId = requireConnectedTab();
+async function evaluate(code, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN', // Run in page context, not extension sandbox
@@ -793,18 +845,18 @@ async function evaluate(code) {
 }
 
 // Get cookies for the current page
-async function getCookies() {
-  const tabId = requireConnectedTab();
+async function getCookies(explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const tab = await chrome.tabs.get(tabId);
   const url = new URL(tab.url);
 
   const cookies = await chrome.cookies.getAll({ domain: url.hostname });
-  return { success: true, cookies };
+  return { success: true, cookies, tabId };
 }
 
 // Set a cookie
-async function setCookie(params) {
-  const tabId = requireConnectedTab();
+async function setCookie(params, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const tab = await chrome.tabs.get(tabId);
   const url = new URL(tab.url);
 
@@ -827,8 +879,8 @@ async function setCookie(params) {
 }
 
 // Get network requests (install interceptor on first call)
-async function getNetworkRequests(filter) {
-  const tabId = requireConnectedTab();
+async function getNetworkRequests(filter, explicitTabId) {
+  const tabId = resolveTabId(explicitTabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (filterPattern) => {

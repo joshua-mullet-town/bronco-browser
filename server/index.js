@@ -26,60 +26,85 @@ const WS_PORT = 9876;
 let extensionSocket = null;
 let pendingRequests = new Map();
 let requestId = 0;
+let wss = null;
 
-// Create WebSocket server for extension
-const wss = new WebSocketServer({ port: WS_PORT });
-console.error(`[Bronco] WebSocket server listening on ws://localhost:${WS_PORT}`);
-
-wss.on('connection', (socket) => {
-  console.error('[Bronco] Extension connected');
-  extensionSocket = socket;
-
-  socket.on('message', (data) => {
-    try {
-      const message = JSON.parse(data.toString());
-
-      // Handle keepalive
-      if (message.type === 'keepalive') {
-        return;
-      }
-
-      // Handle extension ready
-      if (message.type === 'extension_ready') {
-        console.error('[Bronco] Extension ready');
-        return;
-      }
-
-      // Handle response to our request
-      if (message.id !== undefined && pendingRequests.has(message.id)) {
-        const { resolve, reject } = pendingRequests.get(message.id);
-        pendingRequests.delete(message.id);
-
-        if (message.error) {
-          reject(new Error(message.error));
-        } else {
-          resolve(message.result);
+// Kill any existing process on our port
+async function killExistingProcess() {
+  const { execSync } = await import('child_process');
+  try {
+    // Find PID using the port
+    const result = execSync(`lsof -ti :${WS_PORT} 2>/dev/null`).toString().trim();
+    if (result) {
+      const pids = result.split('\n');
+      for (const pid of pids) {
+        if (pid && pid !== process.pid.toString()) {
+          console.error(`[Bronco] Killing existing process on port ${WS_PORT}: PID ${pid}`);
+          try {
+            execSync(`kill ${pid}`);
+          } catch (e) {
+            // Process may have already died
+          }
         }
       }
-    } catch (err) {
-      console.error('[Bronco] Error parsing message:', err);
+      // Wait a moment for port to be released
+      await new Promise(r => setTimeout(r, 500));
     }
-  });
+  } catch (e) {
+    // No process found on port, that's fine
+  }
+}
 
-  socket.on('close', () => {
-    console.error('[Bronco] Extension disconnected');
-    extensionSocket = null;
-    // Reject all pending requests
-    for (const [id, { reject }] of pendingRequests) {
-      reject(new Error('Extension disconnected'));
+// Create WebSocket server with retry logic
+async function createWebSocketServer() {
+  await killExistingProcess();
+
+  return new Promise((resolve, reject) => {
+    const server = new WebSocketServer({ port: WS_PORT });
+
+    server.on('listening', () => {
+      console.error(`[Bronco] WebSocket server listening on ws://localhost:${WS_PORT}`);
+      resolve(server);
+    });
+
+    server.on('error', async (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[Bronco] Port ${WS_PORT} in use, attempting to recover...`);
+        server.close();
+        await killExistingProcess();
+        // Try one more time
+        try {
+          const retryServer = new WebSocketServer({ port: WS_PORT });
+          retryServer.on('listening', () => {
+            console.error(`[Bronco] WebSocket server listening on ws://localhost:${WS_PORT} (after retry)`);
+            resolve(retryServer);
+          });
+          retryServer.on('error', (retryErr) => {
+            reject(new Error(`Failed to start WebSocket server: ${retryErr.message}. Port ${WS_PORT} may be stuck. Try: kill $(lsof -ti :${WS_PORT})`));
+          });
+        } catch (retryErr) {
+          reject(new Error(`Failed to start WebSocket server: ${retryErr.message}`));
+        }
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+// Graceful shutdown
+function setupShutdownHandlers() {
+  const cleanup = () => {
+    console.error('[Bronco] Shutting down...');
+    if (wss) {
+      wss.close();
     }
-    pendingRequests.clear();
-  });
+    process.exit(0);
+  };
 
-  socket.on('error', (err) => {
-    console.error('[Bronco] Socket error:', err);
-  });
-});
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+  process.on('SIGHUP', cleanup);
+}
 
 // Send message to extension and wait for response
 function sendToExtension(method, params = {}) {
@@ -163,22 +188,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'browser_get_page_info',
-        description: 'Get information about the currently connected tab',
+        description: 'Get information about a tab',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to get info for (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
       {
         name: 'browser_navigate',
-        description: 'Navigate the connected tab to a URL',
+        description: 'Navigate a tab to a URL',
         inputSchema: {
           type: 'object',
           properties: {
             url: {
               type: 'string',
               description: 'The URL to navigate to',
+            },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to navigate (uses connected tab if not specified)',
             },
           },
           required: ['url'],
@@ -193,6 +227,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: {
               type: 'string',
               description: 'CSS selector for the element to click (e.g., "#submit-btn", "button.primary")',
+            },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
             },
           },
           required: ['selector'],
@@ -212,6 +250,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'Text to type into the element',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['selector', 'text'],
         },
@@ -229,6 +271,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             value: {
               type: 'string',
               description: 'Value of the option to select',
+            },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
             },
           },
           required: ['selector', 'value'],
@@ -248,16 +294,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'Optional CSS selector for element to focus first',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['key'],
         },
       },
       {
         name: 'browser_screenshot',
-        description: 'Take a screenshot of the current page',
+        description: 'Take a screenshot of a page',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to screenshot (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
@@ -266,7 +321,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Go back in browser history',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
@@ -275,7 +335,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Go forward in browser history',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
@@ -284,7 +349,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Get console messages from the page. First call installs interceptor, subsequent calls return captured messages.',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to get console from (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
@@ -293,7 +363,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Get a snapshot of interactive elements on the page with refs for clicking/typing',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to snapshot (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
@@ -307,13 +382,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'URL to open in the new tab (defaults to blank)',
             },
+            windowId: {
+              type: 'number',
+              description: 'Window ID to create the tab in (uses current window if not specified)',
+            },
           },
           required: [],
         },
       },
       {
+        name: 'browser_window_new',
+        description: 'Create a new browser window for test isolation',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'URL to open in the first tab (defaults to blank)',
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'browser_window_close',
+        description: 'Close a browser window and all its tabs',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            windowId: {
+              type: 'number',
+              description: 'Window ID to close',
+            },
+          },
+          required: ['windowId'],
+        },
+      },
+      {
         name: 'browser_upload_file',
-        description: 'Upload a file to a file input element on the connected page',
+        description: 'Upload a file to a file input element on the page',
         inputSchema: {
           type: 'object',
           properties: {
@@ -333,6 +440,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'MIME type of the file (auto-detected if not provided)',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['selector', 'filePath'],
         },
@@ -347,6 +458,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             selector: {
               type: 'string',
               description: 'CSS selector for the element to hover over',
+            },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
             },
           },
           required: ['selector'],
@@ -380,6 +495,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'CSS selector for the drop target',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['sourceSelector', 'targetSelector'],
         },
@@ -398,6 +517,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             promptText: {
               type: 'string',
               description: 'Text to enter for prompt dialogs (optional)',
+            },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
             },
           },
           required: ['action'],
@@ -437,6 +560,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'Optional CSS selector for element to scroll (defaults to page)',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['direction'],
         },
@@ -455,6 +582,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'Maximum time to wait in milliseconds (default 10000)',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['selector'],
         },
@@ -469,22 +600,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'JavaScript code to execute',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to operate on (uses connected tab if not specified)',
+            },
           },
           required: ['code'],
         },
       },
       {
         name: 'browser_get_cookies',
-        description: 'Get cookies for the current page',
+        description: 'Get cookies for a page',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to get cookies for (uses connected tab if not specified)',
+            },
+          },
           required: [],
         },
       },
       {
         name: 'browser_set_cookie',
-        description: 'Set a cookie for the current page',
+        description: 'Set a cookie for a page',
         inputSchema: {
           type: 'object',
           properties: {
@@ -516,6 +656,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'Expiration timestamp in seconds since epoch',
             },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to set cookie for (uses connected tab if not specified)',
+            },
           },
           required: ['name', 'value'],
         },
@@ -529,6 +673,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             filter: {
               type: 'string',
               description: 'Optional URL pattern to filter requests',
+            },
+            tabId: {
+              type: 'number',
+              description: 'Tab ID to get requests for (uses connected tab if not specified)',
             },
           },
           required: [],
@@ -611,51 +759,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
 
       case 'browser_get_page_info':
-        result = await sendToExtension('get_page_info');
+        result = await sendToExtension('get_page_info', { tabId: args.tabId });
         break;
 
       case 'browser_navigate':
-        result = await sendToExtension('navigate', { url: args.url });
+        result = await sendToExtension('navigate', { url: args.url, tabId: args.tabId });
         break;
 
       case 'browser_click':
-        result = await sendToExtension('click', { selector: args.selector });
+        result = await sendToExtension('click', { selector: args.selector, tabId: args.tabId });
         break;
 
       case 'browser_type':
-        result = await sendToExtension('type', { selector: args.selector, text: args.text });
+        result = await sendToExtension('type', { selector: args.selector, text: args.text, tabId: args.tabId });
         break;
 
       case 'browser_select_option':
-        result = await sendToExtension('select_option', { selector: args.selector, value: args.value });
+        result = await sendToExtension('select_option', { selector: args.selector, value: args.value, tabId: args.tabId });
         break;
 
       case 'browser_press_key':
-        result = await sendToExtension('press_key', { key: args.key, selector: args.selector });
+        result = await sendToExtension('press_key', { key: args.key, selector: args.selector, tabId: args.tabId });
         break;
 
       case 'browser_screenshot':
-        result = await sendToExtension('screenshot');
+        result = await sendToExtension('screenshot', { tabId: args.tabId });
         break;
 
       case 'browser_go_back':
-        result = await sendToExtension('go_back');
+        result = await sendToExtension('go_back', { tabId: args.tabId });
         break;
 
       case 'browser_go_forward':
-        result = await sendToExtension('go_forward');
+        result = await sendToExtension('go_forward', { tabId: args.tabId });
         break;
 
       case 'browser_console_messages':
-        result = await sendToExtension('console_messages');
+        result = await sendToExtension('console_messages', { tabId: args.tabId });
         break;
 
       case 'browser_snapshot':
-        result = await sendToExtension('snapshot');
+        result = await sendToExtension('snapshot', { tabId: args.tabId });
         break;
 
       case 'browser_tab_new':
-        result = await sendToExtension('tab_new', { url: args.url });
+        result = await sendToExtension('tab_new', { url: args.url, windowId: args.windowId });
+        break;
+
+      case 'browser_window_new':
+        result = await sendToExtension('window_new', { url: args.url });
+        break;
+
+      case 'browser_window_close':
+        result = await sendToExtension('window_close', { windowId: args.windowId });
         break;
 
       case 'browser_upload_file': {
@@ -675,13 +831,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           fileName,
           fileContent: base64Content,
           mimeType,
+          tabId: args.tabId,
         });
         break;
       }
 
       // Phase 2 tools
       case 'browser_hover':
-        result = await sendToExtension('hover', { selector: args.selector });
+        result = await sendToExtension('hover', { selector: args.selector, tabId: args.tabId });
         break;
 
       case 'browser_wait':
@@ -693,14 +850,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'browser_drag':
         result = await sendToExtension('drag', {
           sourceSelector: args.sourceSelector,
-          targetSelector: args.targetSelector
+          targetSelector: args.targetSelector,
+          tabId: args.tabId
         });
         break;
 
       case 'browser_handle_dialog':
         result = await sendToExtension('handle_dialog', {
           action: args.action,
-          promptText: args.promptText
+          promptText: args.promptText,
+          tabId: args.tabId
         });
         break;
 
@@ -713,23 +872,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = await sendToExtension('scroll', {
           direction: args.direction,
           amount: args.amount,
-          selector: args.selector
+          selector: args.selector,
+          tabId: args.tabId
         });
         break;
 
       case 'browser_wait_for_selector':
         result = await sendToExtension('wait_for_selector', {
           selector: args.selector,
-          timeout: args.timeout
+          timeout: args.timeout,
+          tabId: args.tabId
         });
         break;
 
       case 'browser_evaluate':
-        result = await sendToExtension('evaluate', { code: args.code });
+        result = await sendToExtension('evaluate', { code: args.code, tabId: args.tabId });
         break;
 
       case 'browser_get_cookies':
-        result = await sendToExtension('get_cookies');
+        result = await sendToExtension('get_cookies', { tabId: args.tabId });
         break;
 
       case 'browser_set_cookie':
@@ -741,11 +902,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           secure: args.secure,
           httpOnly: args.httpOnly,
           expirationDate: args.expirationDate,
+          tabId: args.tabId,
         });
         break;
 
       case 'browser_network_requests':
-        result = await sendToExtension('network_requests', { filter: args.filter });
+        result = await sendToExtension('network_requests', { filter: args.filter, tabId: args.tabId });
         break;
 
       // Recording tools - now use file-based storage
@@ -998,11 +1160,88 @@ async function replayRecordingFromDisk(name) {
   };
 }
 
+// Setup WebSocket connection handler
+function setupWebSocketHandlers(wsServer) {
+  wsServer.on('connection', (socket) => {
+    console.error('[Bronco] Extension connected');
+    extensionSocket = socket;
+
+    socket.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+
+        // Handle keepalive
+        if (message.type === 'keepalive') {
+          return;
+        }
+
+        // Handle extension ready
+        if (message.type === 'extension_ready') {
+          console.error('[Bronco] Extension ready');
+          return;
+        }
+
+        // Handle response to our request
+        if (message.id !== undefined && pendingRequests.has(message.id)) {
+          const { resolve, reject } = pendingRequests.get(message.id);
+          pendingRequests.delete(message.id);
+
+          if (message.error) {
+            reject(new Error(message.error));
+          } else {
+            resolve(message.result);
+          }
+        }
+      } catch (err) {
+        console.error('[Bronco] Error parsing message:', err);
+      }
+    });
+
+    socket.on('close', () => {
+      console.error('[Bronco] Extension disconnected');
+      extensionSocket = null;
+      // Reject all pending requests
+      for (const [id, { reject }] of pendingRequests) {
+        reject(new Error('Extension disconnected'));
+      }
+      pendingRequests.clear();
+    });
+
+    socket.on('error', (err) => {
+      console.error('[Bronco] Socket error:', err);
+    });
+  });
+}
+
 // Start the server
 async function main() {
+  setupShutdownHandlers();
+
+  // Create WebSocket server with automatic port recovery
+  try {
+    wss = await createWebSocketServer();
+    setupWebSocketHandlers(wss);
+  } catch (err) {
+    console.error(`[Bronco] Failed to start WebSocket server: ${err.message}`);
+    console.error(`[Bronco] Try running: kill $(lsof -ti :${WS_PORT})`);
+    process.exit(1);
+  }
+
+  // Keepalive interval - prevents the process from exiting due to idle timeout
+  // Pings connected extension every 30 seconds to keep connection alive
+  setInterval(() => {
+    if (extensionSocket && extensionSocket.readyState === 1) {
+      try {
+        extensionSocket.send(JSON.stringify({ type: 'ping' }));
+      } catch (e) {
+        // Ignore send errors
+      }
+    }
+  }, 30000);
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[Bronco] Server started');
+  console.error('[Bronco] MCP server started');
 }
 
 main().catch((error) => {
