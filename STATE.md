@@ -2,6 +2,27 @@
 
 *What's built and working.*
 
+## v1.2 - Stability & Distribution (2025-01-03)
+
+### Connection Reliability
+- Server keepalive: pings extension every 30s to prevent idle timeout
+- Extension auto-reconnect with exponential backoff (1s → 2s → 4s → ... max 30s)
+- No more manual restarts when connection drops
+
+### Parallel Test Runner
+- `/bronco-run-tests` slash command for Claude Code
+- Spawns N agents in parallel, each with its own tab
+- Test discovery from `bronco-tests/` directory
+- Timing instrumentation for performance tracking
+
+### Distribution
+- Chrome Web Store: Published and approved
+- npm: `npx bronco-browser init` for easy project setup
+- Automated publishing via `./publish-extension.sh`
+- Works with both Claude Code and Claude Desktop
+
+---
+
 ## v1.1 - Parallel Operations (2024-12-31)
 
 ### Parallelization Support
