@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bronco Browser",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Wrangle your browser. Automation that uses your real browser with all your cookies and logins.",
   "minimum_chrome_version": "116",
   "permissions": [
